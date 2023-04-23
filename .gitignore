@@ -3,6 +3,7 @@
 # Edit at https://www.toptal.com/developers/gitignore?templates=pycharm,python
 
 # Custom
+.idea
 log/
 results/
 saved_checkpoints/
@@ -241,3 +242,5 @@ dmypy.json
 .pytype/
 
 # End of https://www.toptal.com/developers/gitignore/api/pycharm,python
+*.pt
+*.html

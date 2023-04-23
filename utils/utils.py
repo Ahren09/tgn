@@ -1,5 +1,61 @@
+import random
+
 import numpy as np
 import torch
+
+
+def set_seed(seed, use_torch=True):
+  random.seed(seed)
+  np.random.seed(seed)
+
+  if use_torch:
+    import torch
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+      torch.cuda.manual_seed(seed)
+      torch.cuda.manual_seed_all(seed)
+
+class MemoryAndStepCounter:
+  """
+  Counter for epoch and step
+  """
+
+  def __init__(self, batch_size, num_batch):
+    from collections import Counter
+    self.epoch = 0
+    self.step = 0
+    self.global_step = 0
+    self.batch_size = batch_size
+    self.num_batch = num_batch
+    self.count = Counter()
+    self.tensor_ids = set()
+
+  def get_global_step(self):
+    return self.epoch * self.num_batch + self.step
+
+  def count_tensors_in_gpu_memory(self, update=True):
+    import gc
+    from collections import Counter
+
+    cur_tensor_ids = set()
+    gc.collect()  # Trigger a garbage collection
+    count_new = Counter()
+    for obj in gc.get_objects():
+      if torch.is_tensor(obj) and obj.is_cuda:
+          count_new[tuple(obj.size())] += 1
+          cur_tensor_ids.add(id(obj))
+
+    # Check for new tensors
+    # new_tensors = cur_tensor_ids - self.tensor_ids
+    self.tensor_ids = cur_tensor_ids
+
+    print(
+      f"{sum(count_new.values())}\t({sum(count_new.values()) - sum(self.count.values())} more) CUDA tensors in memory")
+    print(count_new - self.count)
+
+    if update:
+      print("Update memory counter ...")
+      self.count = count_new
 
 
 class MergeLayer(torch.nn.Module):
@@ -184,3 +240,8 @@ class NeighborFinder:
           edge_idxs[i, n_neighbors - len(source_edge_idxs):] = source_edge_idxs
 
     return neighbors, edge_idxs, edge_times
+
+def rgb_to_hex(color):
+    # Convert a tuple of RGB values to a hex string
+    r, g, b = [int(c * 255) for c in color]
+    return f'#{r:02x}{g:02x}{b:02x}'

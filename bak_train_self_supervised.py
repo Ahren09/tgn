@@ -1,30 +1,22 @@
 import argparse
 import logging
 import math
+import os.path as osp
 import pickle
 import sys
 import time
-import warnings
 from pathlib import Path
 
 import numpy as np
-import openTSNE
-import pandas as pd
 import torch
-from tqdm import trange
 
-warnings.simplefilter(action='ignore', category=FutureWarning)
 from evaluation.evaluation import eval_edge_prediction
 from model.tgn import TGN
 from utils.data_processing import get_data, compute_time_statistics
-from utils.utils import EarlyStopMonitor, RandEdgeSampler, get_neighbor_finder, \
-  set_seed, MemoryAndStepCounter
+from utils.utils import EarlyStopMonitor, RandEdgeSampler, get_neighbor_finder
 
-SEED = 42
-set_seed(SEED)
-
-DIM = 100
-MEMORY_DIM = 172
+torch.manual_seed(0)
+np.random.seed(0)
 
 ### Argument and global variables
 parser = argparse.ArgumentParser('TGN self-supervised training')
@@ -48,9 +40,9 @@ parser.add_argument('--n_runs', type=int, default=1, help='Number of runs')
 parser.add_argument('--drop_out', type=float, default=0.1,
                     help='Dropout probability')
 parser.add_argument('--gpu', type=int, default=0, help='Idx for the gpu to use')
-parser.add_argument('--node_dim', type=int, default=MEMORY_DIM,
+parser.add_argument('--node_dim', type=int, default=100,
                     help='Dimensions of the node embedding')
-parser.add_argument('--time_dim', type=int, default=DIM,
+parser.add_argument('--time_dim', type=int, default=100,
                     help='Dimensions of the time embedding')
 parser.add_argument('--backprop_every', type=int, default=1,
                     help='Every how many batches to '
@@ -71,9 +63,9 @@ parser.add_argument('--aggregator', type=str, default="last",
                          'aggregator')
 parser.add_argument('--memory_update_at_end', action='store_true',
                     help='Whether to update memory at the end or at the start of the batch')
-parser.add_argument('--message_dim', type=int, default=DIM,
+parser.add_argument('--message_dim', type=int, default=100,
                     help='Dimensions of the messages')
-parser.add_argument('--memory_dim', type=int, default=MEMORY_DIM,
+parser.add_argument('--memory_dim', type=int, default=172,
                     help='Dimensions of the memory for '
                          'each user')
 parser.add_argument('--different_new_nodes', action='store_true',
@@ -90,17 +82,12 @@ parser.add_argument('--use_source_embedding_in_message', action='store_true',
 parser.add_argument('--dyrep', action='store_true',
                     help='Whether to run the dyrep model')
 
-parser.add_argument('--do_visual', action='store_true',
-                    help='Whether to visualize node embeddings')
-parser.add_argument('--visualize_every', type=int, default=10,
-                    help='The interval (number of batches) to visualize node embeddings')
-
 try:
   args = parser.parse_args()
 except:
   parser.print_help()
   sys.exit(0)
-print(args)
+
 BATCH_SIZE = args.bs
 NUM_NEIGHBORS = args.n_degree
 NUM_NEG = 1
@@ -141,10 +128,24 @@ logger.addHandler(ch)
 logger.info(args)
 
 ### Extract data for training, validation and testing
-node_features, edge_features, full_data, train_data, val_data, test_data, new_node_val_data, \
-new_node_test_data = get_data(DATA,
-                              different_new_nodes_between_val_and_test=args.different_new_nodes,
-                              randomize_features=args.randomize_features)
+
+cache_path = f'cache_{args.data}.pt'
+
+if osp.exists(cache_path):
+  logger.info('Loading cached data')
+  cache = torch.load(cache_path)
+
+else:
+  cache = get_data(DATA,
+                   different_new_nodes_between_val_and_test=args.different_new_nodes,
+                   randomize_features=args.randomize_features)
+  torch.save(cache, cache_path)
+
+node_features, edge_features, full_data, train_data, val_data, test_data, new_node_val_data, new_node_test_data = cache
+
+# Save the cache files for debugging in the misinformation project
+# torch.save((node_features, edge_features, full_data.__dict__, train_data.__dict__, val_data.__dict__, test_data.__dict__, new_node_val_data.__dict__, new_node_test_data.__dict__), 'wiki_for_debug.pt')
+
 
 # Initialize training neighbor finder to retrieve temporal graph
 train_ngh_finder = get_neighbor_finder(train_data, args.uniform)
@@ -156,7 +157,7 @@ full_ngh_finder = get_neighbor_finder(full_data, args.uniform)
 # across different runs
 # NB: in the inductive setting, negatives are sampled only amongst other new nodes
 train_rand_sampler = RandEdgeSampler(train_data.sources,
-                                     train_data.destinations, seed=42)
+                                     train_data.destinations)
 val_rand_sampler = RandEdgeSampler(full_data.sources, full_data.destinations,
                                    seed=0)
 nn_val_rand_sampler = RandEdgeSampler(new_node_val_data.sources,
@@ -171,7 +172,6 @@ nn_test_rand_sampler = RandEdgeSampler(new_node_test_data.sources,
 # Set device
 device_string = 'cuda:{}'.format(GPU) if torch.cuda.is_available() else 'cpu'
 device = torch.device(device_string)
-args.device = device
 
 # Compute time statistics
 mean_time_shift_src, std_time_shift_src, mean_time_shift_dst, std_time_shift_dst = \
@@ -220,16 +220,7 @@ for i in range(args.n_runs):
   total_epoch_times = []
   train_losses = []
 
-  shape_counter_li = []
-
-  step_counter = MemoryAndStepCounter(batch_size=BATCH_SIZE,
-                                      num_batch=num_batch)
-
   early_stopper = EarlyStopMonitor(max_round=args.patience)
-
-  # all_node_embeddings = torch.zeros((full_data.n_unique_nodes, NODE_DIM), dtype=torch.float)
-  all_node_embeddings = None
-
   for epoch in range(NUM_EPOCH):
     start_epoch = time.time()
     ### Training
@@ -242,37 +233,15 @@ for i in range(args.n_runs):
     tgn.set_neighbor_finder(train_ngh_finder)
     m_loss = []
 
-    # The last updated time of each node in the memory
-    last_update_timestamp = -torch.ones((full_data.n_unique_nodes + 1,),
-                                        dtype=torch.long, device=device)
-
-    node_states = torch.zeros((full_data.n_unique_nodes + 1,),
-                              dtype=torch.long, device=device)
-
-    latest_node_embeddings = torch.zeros(
-      (full_data.n_unique_nodes + 1, NODE_DIM), dtype=torch.float,
-      device=device)
-
     logger.info('start {} epoch'.format(epoch))
-
-    tsne_model = openTSNE.TSNE(
-      initialization="pca",
-      n_components=2,
-      perplexity=30,
-      metric="cosine",
-      n_jobs=32,
-      random_state=SEED,
-      verbose=True, n_iter=1000
-    )
-
-    for k in trange(0, num_batch, args.backprop_every):
+    for k in range(0, num_batch, args.backprop_every):
       loss = 0
       optimizer.zero_grad()
 
       # Custom loop to allow to perform backpropagation only every a certain number of batches
       for j in range(args.backprop_every):
         batch_idx = k + j
-        # print("batch_idx: ", batch_idx)
+
         if batch_idx >= num_batch:
           continue
 
@@ -280,56 +249,27 @@ for i in range(args.n_runs):
         end_idx = min(num_instance, start_idx + BATCH_SIZE)
         sources_batch, destinations_batch = train_data.sources[
                                             start_idx:end_idx], \
-                                            train_data.destinations[
-                                            start_idx:end_idx]
+          train_data.destinations[
+          start_idx:end_idx]
         edge_idxs_batch = train_data.edge_idxs[start_idx: end_idx]
         timestamps_batch = train_data.timestamps[start_idx:end_idx]
 
         size = len(sources_batch)
         _, negatives_batch = train_rand_sampler.sample(size)
 
-        pos_label = torch.ones(size, dtype=torch.float, device=device,
-                               requires_grad=False)
-        neg_label = torch.zeros(size, dtype=torch.float, device=device,
-                                requires_grad=False)
+        with torch.no_grad():
+          pos_label = torch.ones(size, dtype=torch.float,
+                                 device=device)
+          neg_label = torch.zeros(size, dtype=torch.float,
+                                  device=device)
 
-        # step_counter.count_tensors_in_gpu_memory()
         tgn = tgn.train()
-
-        # NOTE: Here we set
-
-        pos_prob, neg_prob, embeds = tgn.compute_edge_probabilities(
+        pos_prob, neg_prob = tgn.compute_edge_probabilities(
           sources_batch, destinations_batch, negatives_batch,
-          timestamps_batch, edge_idxs_batch, NUM_NEIGHBORS,
-          return_embeds=args.do_visual)
-
-        if args.do_visual:
-          (src_emb, dst_emb, neg_dst_emb) = embeds
-
-          node_indices = np.concatenate(
-            [sources_batch, destinations_batch, negatives_batch])
-
-          latest_node_embeddings[
-            torch.tensor(node_indices, dtype=torch.long,
-                         device=args.device)] = torch.concat(
-            [src_emb.detach(), dst_emb.detach(),
-             neg_dst_emb.detach()], dim=0)
-
-          # We assume only source nodes can be infected/banned
-          mask = train_data.labels[start_idx:end_idx] == 1
-          source_nodes_with_state_changes = sources_batch[mask]
-          node_states[source_nodes_with_state_changes] = 1
-
-          last_update_timestamp[sources_batch] = torch.tensor(
-            timestamps_batch,
-            dtype=torch.long,
-            device=device)
-          last_update_timestamp[destinations_batch] = torch.tensor(
-            timestamps_batch, dtype=torch.long, device=device)
+          timestamps_batch, edge_idxs_batch, NUM_NEIGHBORS)
 
         loss += criterion(pos_prob.squeeze(), pos_label) + criterion(
           neg_prob.squeeze(), neg_label)
-        del pos_label, neg_label, pos_prob, neg_prob
 
       loss /= args.backprop_every
 
@@ -341,9 +281,6 @@ for i in range(args.n_runs):
       # the start of time
       if USE_MEMORY:
         tgn.memory.detach_memory()
-
-    state_dict = tgn.state_dict()
-    torch.save(state_dict, get_checkpoint_path(epoch))
 
     epoch_time = time.time() - start_epoch
     epoch_times.append(epoch_time)
@@ -357,12 +294,10 @@ for i in range(args.n_runs):
       # validation on unseen nodes
       train_memory_backup = tgn.memory.backup_memory()
 
-    val_ap, val_auc = eval_edge_prediction(model=tgn, args=args,
+    val_ap, val_auc = eval_edge_prediction(model=tgn,
                                            negative_edge_sampler=val_rand_sampler,
                                            data=val_data,
-                                           n_neighbors=NUM_NEIGHBORS,
-                                           last_update_timestamp=last_update_timestamp,
-                                           latest_node_embeddings=latest_node_embeddings)
+                                           n_neighbors=NUM_NEIGHBORS)
     if USE_MEMORY:
       val_memory_backup = tgn.memory.backup_memory()
       # Restore memory we had at the end of training to be used when validating on new nodes.
@@ -371,12 +306,10 @@ for i in range(args.n_runs):
       tgn.memory.restore_memory(train_memory_backup)
 
     # Validate on unseen nodes
-    nn_val_ap, nn_val_auc = eval_edge_prediction(model=tgn, args=args,
+    nn_val_ap, nn_val_auc = eval_edge_prediction(model=tgn,
                                                  negative_edge_sampler=val_rand_sampler,
                                                  data=new_node_val_data,
-                                                 n_neighbors=NUM_NEIGHBORS,
-                                                 last_update_timestamp=last_update_timestamp,
-                                                 latest_node_embeddings=latest_node_embeddings)
+                                                 n_neighbors=NUM_NEIGHBORS)
 
     if USE_MEMORY:
       # Restore memory we had at the end of validation
@@ -420,30 +353,6 @@ for i in range(args.n_runs):
     else:
       torch.save(tgn.state_dict(), get_checkpoint_path(epoch))
 
-    if epoch > 9:
-      print()
-
-    all_node_embeddings = latest_node_embeddings.to(args.device)
-
-    print(
-      node_states.sum() == train_data.labels.sum() + val_data.labels.sum() + new_node_val_data.labels.sum())
-
-    mask = (last_update_timestamp.cpu().numpy() >= 0)
-
-    embedding_train = tsne_model.fit(
-      all_node_embeddings[mask].cpu().numpy())
-
-    df_visual = pd.DataFrame(embedding_train, columns=['x', 'y'])
-
-    df_visual.index = np.where(mask)[0]
-    # df_visual[
-    #     'seen_in_train_and_val'] = last_update_timestamp.cpu().numpy() >= 0
-    df_visual['label'] = 0
-    nodes_wth_state_changes = np.where(node_states.cpu().numpy() == 1)[
-      0].tolist()
-
-    df_visual.loc[nodes_wth_state_changes, 'label'] = 1
-
   # Training has finished, we have loaded the best model, and we want to backup its current
   # memory (which has seen validation edges) so that it can also be used when testing on unseen
   # nodes
@@ -452,25 +361,19 @@ for i in range(args.n_runs):
 
   ### Test
   tgn.embedding_module.neighbor_finder = full_ngh_finder
-  test_ap, test_auc = eval_edge_prediction(model=tgn, args=args,
+  test_ap, test_auc = eval_edge_prediction(model=tgn,
                                            negative_edge_sampler=test_rand_sampler,
                                            data=test_data,
-                                           n_neighbors=NUM_NEIGHBORS,
-                                           last_update_timestamp=last_update_timestamp,
-                                           latest_node_embeddings=latest_node_embeddings,
-                                           node_states=node_states)
+                                           n_neighbors=NUM_NEIGHBORS)
 
   if USE_MEMORY:
     tgn.memory.restore_memory(val_memory_backup)
 
   # Test on unseen nodes
-  nn_test_ap, nn_test_auc = eval_edge_prediction(model=tgn, args=args,
+  nn_test_ap, nn_test_auc = eval_edge_prediction(model=tgn,
                                                  negative_edge_sampler=nn_test_rand_sampler,
                                                  data=new_node_test_data,
-                                                 n_neighbors=NUM_NEIGHBORS,
-                                                 last_update_timestamp=last_update_timestamp,
-                                                 latest_node_embeddings=latest_node_embeddings,
-                                                 node_states=node_states)
+                                                 n_neighbors=NUM_NEIGHBORS)
 
   logger.info(
     'Test statistics: Old nodes -- auc: {}, ap: {}'.format(test_auc,
