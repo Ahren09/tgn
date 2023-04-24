@@ -196,7 +196,7 @@ class TGN(torch.nn.Module):
                                  edge_idxs, n_neighbors=20, return_embeds=False):
     """
     Compute probabilities for edges between sources and destination and between sources and
-    negatives by first computing temporal embeddings using the TGN encoder and then feeding them
+    negatives by first computing temporal embeddings using the MyTGN encoder and then feeding them
     into the MLP decoder.
     :param destination_nodes [batch_size]: destination ids
     :param negative_nodes [batch_size]: ids of negative sampled destination

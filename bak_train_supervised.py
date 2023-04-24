@@ -21,7 +21,7 @@ np.random.seed(0)
 torch.manual_seed(0)
 
 ### Argument and global variables
-parser = argparse.ArgumentParser('TGN self-supervised training')
+parser = argparse.ArgumentParser('MyTGN self-supervised training')
 parser.add_argument('-d', '--data', type=str,
                     help='Dataset name (eg. wikipedia or reddit)',
                     default='wikipedia')
@@ -182,11 +182,11 @@ for i in range(args.n_runs):
   logger.debug('Num of training instances: {}'.format(num_instance))
   logger.debug('Num of batches per epoch: {}'.format(num_batch))
 
-  logger.info('Loading saved TGN model')
+  logger.info('Loading saved MyTGN model')
   model_path = f'./saved_models/{args.prefix}-{DATA}.pth'
   tgn.load_state_dict(torch.load(model_path))
   tgn.eval()
-  logger.info('TGN models loaded')
+  logger.info('MyTGN models loaded')
   logger.info('Start training node classification task')
 
   decoder = MLP(node_features.shape[1], drop=DROP_OUT)

@@ -18,7 +18,7 @@ torch.manual_seed(0)
 np.random.seed(0)
 
 ### Argument and global variables
-parser = argparse.ArgumentParser('TGN self-supervised training')
+parser = argparse.ArgumentParser('MyTGN self-supervised training')
 parser.add_argument('-d', '--data', type=str, help='Dataset name (eg. wikipedia or reddit)',
                     default='wikipedia')
 parser.add_argument('--bs', type=int, default=200, help='Batch_size')
@@ -339,9 +339,9 @@ for i in range(args.n_runs):
     "total_epoch_times": total_epoch_times
   }, open(results_path, "wb"))
 
-  logger.info('Saving TGN model')
+  logger.info('Saving MyTGN model')
   if USE_MEMORY:
     # Restore memory at the end of validation (save a model which is ready for testing)
     tgn.memory.restore_memory(val_memory_backup)
   torch.save(tgn.state_dict(), MODEL_SAVE_PATH)
-  logger.info('TGN model saved')
+  logger.info('MyTGN model saved')

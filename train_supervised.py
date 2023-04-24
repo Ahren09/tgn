@@ -25,7 +25,7 @@ DIM = 100
 MEMORY_DIM = 172
 
 ### Argument and global variables
-parser = argparse.ArgumentParser('TGN self-supervised training')
+parser = argparse.ArgumentParser('MyTGN self-supervised training')
 parser.add_argument('-d', '--data', type=str,
                     help='Dataset name (eg. wikipedia or reddit)',
                     default='wikipedia')
@@ -197,7 +197,7 @@ for i in range(args.n_runs):
   logger.debug('Num of training instances: {}'.format(num_instance))
   logger.debug('Num of batches per epoch: {}'.format(num_batch))
 
-  logger.info('Loading saved TGN model')
+  logger.info('Loading saved MyTGN model')
   model_path = f'./saved_models/{args.prefix}-{DATA}.pth'
 
   # Added for debug
@@ -205,7 +205,7 @@ for i in range(args.n_runs):
 
   tgn.load_state_dict(torch.load(model_path))
   tgn.eval()
-  logger.info('TGN models loaded')
+  logger.info('MyTGN models loaded')
   logger.info('Start training node classification task')
 
   decoder = MLP(node_features.shape[1], drop=DROP_OUT)
@@ -255,8 +255,8 @@ for i in range(args.n_runs):
 
     @torch.no_grad()
     def get_all_node_embeddings(step):
+      assert not tgn.training
       decoder.eval()
-      tgn.eval()
       latest_timestamp_in_batch = max(
         tgn.memory.get_last_update(list(range(tgn.n_nodes))))
       latest_timestamp_in_batch = latest_timestamp_in_batch.item()
@@ -269,8 +269,6 @@ for i in range(args.n_runs):
         timestamps=np.full(nodes.shape[0], latest_timestamp_in_batch),
         n_layers=tgn.n_layers,
         n_neighbors=tgn.n_neighbors).detach().cpu().numpy()
-      decoder.train()
-      tgn.train()
 
       return step, latest_timestamp_in_batch, emb
 
@@ -278,7 +276,6 @@ for i in range(args.n_runs):
     if args.do_visual:
       emb_li = [get_all_node_embeddings(0)]
 
-    tgn.train()
     for k in trange(num_batch):
       s_idx = k * BATCH_SIZE
       e_idx = min(num_instance, s_idx + BATCH_SIZE)
@@ -332,8 +329,6 @@ for i in range(args.n_runs):
           device=device)
         last_update_timestamp[destinations_batch] = torch.tensor(
           timestamps_batch, dtype=torch.long, device=device)
-
-        tgn.train()
 
       decoder_loss = decoder_loss_criterion(pred, labels_batch_torch)
       decoder_loss.backward()
