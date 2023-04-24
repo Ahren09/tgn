@@ -20,80 +20,59 @@ from utils.data_processing import get_data, compute_time_statistics
 from utils.utils import EarlyStopMonitor, RandEdgeSampler, get_neighbor_finder, \
   set_seed, MemoryAndStepCounter
 
-SEED = 42
-set_seed(SEED)
-
-DIM = 100
-MEMORY_DIM = 172
+torch.manual_seed(0)
+np.random.seed(0)
 
 ### Argument and global variables
 parser = argparse.ArgumentParser('TGN self-supervised training')
-parser.add_argument('-d', '--data', type=str,
-                    help='Dataset name (eg. wikipedia or reddit)',
+parser.add_argument('-d', '--data', type=str, help='Dataset name (eg. wikipedia or reddit)',
                     default='wikipedia')
 parser.add_argument('--bs', type=int, default=200, help='Batch_size')
-parser.add_argument('--prefix', type=str, default='',
-                    help='Prefix to name the checkpoints')
-parser.add_argument('--n_degree', type=int, default=10,
-                    help='Number of neighbors to sample')
-parser.add_argument('--n_head', type=int, default=2,
-                    help='Number of heads used in attention layer')
+parser.add_argument('--prefix', type=str, default='', help='Prefix to name the checkpoints')
+parser.add_argument('--n_degree', type=int, default=10, help='Number of neighbors to sample')
+parser.add_argument('--n_head', type=int, default=2, help='Number of heads used in attention layer')
 parser.add_argument('--n_epoch', type=int, default=50, help='Number of epochs')
-parser.add_argument('--n_layer', type=int, default=1,
-                    help='Number of network layers')
+parser.add_argument('--n_layer', type=int, default=1, help='Number of network layers')
 parser.add_argument('--lr', type=float, default=0.0001, help='Learning rate')
-parser.add_argument('--patience', type=int, default=5,
-                    help='Patience for early stopping')
+parser.add_argument('--patience', type=int, default=5, help='Patience for early stopping')
 parser.add_argument('--n_runs', type=int, default=1, help='Number of runs')
-parser.add_argument('--drop_out', type=float, default=0.1,
-                    help='Dropout probability')
+parser.add_argument('--drop_out', type=float, default=0.1, help='Dropout probability')
 parser.add_argument('--gpu', type=int, default=0, help='Idx for the gpu to use')
-parser.add_argument('--node_dim', type=int, default=MEMORY_DIM,
-                    help='Dimensions of the node embedding')
-parser.add_argument('--time_dim', type=int, default=DIM,
-                    help='Dimensions of the time embedding')
-parser.add_argument('--backprop_every', type=int, default=1,
-                    help='Every how many batches to '
-                         'backprop')
+parser.add_argument('--node_dim', type=int, default=100, help='Dimensions of the node embedding')
+parser.add_argument('--time_dim', type=int, default=100, help='Dimensions of the time embedding')
+parser.add_argument('--backprop_every', type=int, default=1, help='Every how many batches to '
+                                                                  'backprop')
 parser.add_argument('--use_memory', action='store_true',
                     help='Whether to augment the model with a node memory')
-parser.add_argument('--embedding_module', type=str, default="graph_attention",
-                    choices=[
-                      "graph_attention", "graph_sum", "identity", "time"],
-                    help='Type of embedding module')
-parser.add_argument('--message_function', type=str, default="identity",
-                    choices=[
-                      "mlp", "identity"], help='Type of message function')
+parser.add_argument('--embedding_module', type=str, default="graph_attention", choices=[
+  "graph_attention", "graph_sum", "identity", "time"], help='Type of embedding module')
+parser.add_argument('--message_function', type=str, default="identity", choices=[
+  "mlp", "identity"], help='Type of message function')
 parser.add_argument('--memory_updater', type=str, default="gru", choices=[
   "gru", "rnn"], help='Type of memory updater')
-parser.add_argument('--aggregator', type=str, default="last",
-                    help='Type of message '
-                         'aggregator')
+parser.add_argument('--aggregator', type=str, default="last", help='Type of message '
+                                                                        'aggregator')
 parser.add_argument('--memory_update_at_end', action='store_true',
                     help='Whether to update memory at the end or at the start of the batch')
-parser.add_argument('--message_dim', type=int, default=DIM,
-                    help='Dimensions of the messages')
-parser.add_argument('--memory_dim', type=int, default=MEMORY_DIM,
-                    help='Dimensions of the memory for '
-                         'each user')
+parser.add_argument('--message_dim', type=int, default=100, help='Dimensions of the messages')
+parser.add_argument('--memory_dim', type=int, default=172, help='Dimensions of the memory for '
+                                                                'each user')
 parser.add_argument('--different_new_nodes', action='store_true',
                     help='Whether to use disjoint set of new nodes for train and val')
 parser.add_argument('--uniform', action='store_true',
                     help='take uniform sampling from temporal neighbors')
 parser.add_argument('--randomize_features', action='store_true',
                     help='Whether to randomize node features')
-parser.add_argument('--use_destination_embedding_in_message',
-                    action='store_true',
+parser.add_argument('--use_destination_embedding_in_message', action='store_true',
                     help='Whether to use the embedding of the destination node as part of the message')
 parser.add_argument('--use_source_embedding_in_message', action='store_true',
                     help='Whether to use the embedding of the source node as part of the message')
 parser.add_argument('--dyrep', action='store_true',
                     help='Whether to run the dyrep model')
 
+
 parser.add_argument('--do_visual', action='store_true',
-                    help='Whether to visualize node embeddings')
-parser.add_argument('--visualize_every', type=int, default=10,
-                    help='The interval (number of batches) to visualize node embeddings')
+                    help='Whether to run the dyrep model')
 
 try:
   args = parser.parse_args()
@@ -255,15 +234,16 @@ for i in range(args.n_runs):
 
     logger.info('start {} epoch'.format(epoch))
 
-    tsne_model = openTSNE.TSNE(
-      initialization="pca",
-      n_components=2,
-      perplexity=30,
-      metric="cosine",
-      n_jobs=32,
-      random_state=SEED,
-      verbose=True, n_iter=1000
-    )
+    if args.do_visual:
+      tsne_model = openTSNE.TSNE(
+        initialization="pca",
+        n_components=2,
+        perplexity=30,
+        metric="cosine",
+        n_jobs=32,
+        random_state=42,
+        verbose=True, n_iter=1000
+      )
 
     for k in trange(0, num_batch, args.backprop_every):
       loss = 0
@@ -420,29 +400,29 @@ for i in range(args.n_runs):
     else:
       torch.save(tgn.state_dict(), get_checkpoint_path(epoch))
 
-    if epoch > 9:
-      print()
+    if args.do_visual:
 
-    all_node_embeddings = latest_node_embeddings.to(args.device)
+      if epoch > 9:
+        print()
 
-    print(
-      node_states.sum() == train_data.labels.sum() + val_data.labels.sum() + new_node_val_data.labels.sum())
+      all_node_embeddings = latest_node_embeddings.to(args.device)
 
-    mask = (last_update_timestamp.cpu().numpy() >= 0)
+      print(
+        node_states.sum() == train_data.labels.sum() + val_data.labels.sum() + new_node_val_data.labels.sum())
 
-    embedding_train = tsne_model.fit(
-      all_node_embeddings[mask].cpu().numpy())
+      mask = (last_update_timestamp.cpu().numpy() >= 0)
 
-    df_visual = pd.DataFrame(embedding_train, columns=['x', 'y'])
+      embedding_train = tsne_model.fit(
+        all_node_embeddings[mask].cpu().numpy())
 
-    df_visual.index = np.where(mask)[0]
-    # df_visual[
-    #     'seen_in_train_and_val'] = last_update_timestamp.cpu().numpy() >= 0
-    df_visual['label'] = 0
-    nodes_wth_state_changes = np.where(node_states.cpu().numpy() == 1)[
-      0].tolist()
+      df_visual = pd.DataFrame(embedding_train, columns=['x', 'y'])
 
-    df_visual.loc[nodes_wth_state_changes, 'label'] = 1
+      df_visual.index = np.where(mask)[0]
+      df_visual['label'] = 0
+      nodes_wth_state_changes = np.where(node_states.cpu().numpy() == 1)[
+        0].tolist()
+
+      df_visual.loc[nodes_wth_state_changes, 'label'] = 1
 
   # Training has finished, we have loaded the best model, and we want to backup its current
   # memory (which has seen validation edges) so that it can also be used when testing on unseen
